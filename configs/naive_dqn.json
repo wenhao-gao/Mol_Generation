@@ -12,7 +12,7 @@
   "batch_size": 128,
 
   "dense_layers": [1024, 512, 128, 32],
-  "activation": "relu",
+  "activation": "ReLU",
   "optimizer": "Adam",
   "batch_norm": true,
   "learning_rate": 0.0001,
@@ -26,7 +26,7 @@
   "gamma": 1.0,
   "discount_factor": 0.9,
   "double_q": true,
-  "num_bootstrap_heads": 10,
+  "num_bootstrap_heads": 1,
   "prioritized": false,
   "prioritized_alpha": 0.6,
   "prioritized_beta": 0.4,
