@@ -8,7 +8,7 @@
   "fingerprint_radius": 3,
   "fingerprint_length": 2048,
 
-  "num_episodes": 50,
+  "num_episodes": 300,
   "batch_size": 128,
 
   "dense_layers": [1024, 512, 128, 32],

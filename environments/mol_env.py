@@ -11,7 +11,7 @@ from rdkit.Chem import Draw
 from six.moves import range
 from six.moves import zip
 
-from rl import mol_utils
+from utils import mol_utils
 
 
 class Result(collections.namedtuple('Result', ['state', 'reward', 'terminated'])):
@@ -251,7 +251,7 @@ class Molecule(object):
 
     def __init__(self,
                  atom_types,
-                 init_mol=None,
+                 init_mol='C',
                  allow_removal=True,
                  allow_no_modification=True,
                  allow_bonds_between_rings=True,
@@ -325,13 +325,14 @@ class Molecule(object):
     def get_path(self):
         return self._path
 
-    def initialize(self):
+    def reset(self):
         """Reset the MDP to its initial state"""
         self._state = self.init_mol
         if self.record_path:
             self._path = [self._state]
         self._valid_actions = self.get_valid_actions(force_rebuild=True)
         self._counter = 0
+        return self._state, self._counter
 
     def get_valid_actions(self, state=None, force_rebuild=False):
 
@@ -392,13 +393,7 @@ class Molecule(object):
         self._valid_actions = self.get_valid_actions(force_rebuild=True)
         self._counter += 1
 
-        result = Result(
-            state=self._state,
-            reward=self._reward(),
-            terminated=(self._counter >= self.max_steps or self._goal_reached())
-        )
-
-        return result
+        return self._state, self._counter, self._reward(), (self._counter >= self.max_steps or self._goal_reached())
 
     def visualize_state(self, state=None, **kwargs):
         """Draw the molecule of the state.

@@ -1,104 +1,276 @@
 """The Deep Q Learning Process"""
 
 import numpy as np
-import math, random
+from absl import logging
+import time
+import os
 
 import torch
-import torch.nn as nn
 import torch.optim as optim
-import torch.autograd as autograd
-import torch.nn.functional as F
+from torch.autograd import Variable
 
-from utils.functions import get_fingerprint
+import matplotlib.pyplot as plt
+
+from environments.envs import OptLogPMolecule
+from model.networks import MultiLayerNetwork, mol2fp
+from utils import replay_buffer
+from utils import schedules
+from utils.functions import get_hparams
 
 
 class DQLearning:
 
     def __init__(self,
-                 hparams,
                  q_fn,
                  environment,
-                 epsilon=0.2):
+                 optimizer,
+                 hparams,
+                 logger,
+                 model_path='./checkpoints'):
 
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        print(f'Device: {self.device}')
         self.hparams = hparams
-        self.lr = self.hparams['learning_rate']
-        self.optimizer = getattr(optim, self.hparams['optimizer'])(self.q_fn.parameters(), self.lr)
-        self.q_fn = q_fn.to(self.device)
-        self.q_fn_q = q_fn.to(self.device)
         self.env = environment
-        self.epsilon = epsilon
+        self.optimizer = optimizer
+        self.logger = logger
+        self.model_path = model_path
+
+        if not os.path.exists(self.model_path):
+            os.makedirs(model_path)
+
+        self.num_episodes = hparams['num_episodes']
+        self.batch_size = hparams['batch_size']
         self.gamma = hparams['gamma']
+        self.prioritized = hparams['prioritized']
+        self.save_frequency = hparams['save_frequency']
+        self.max_steps_per_episode = hparams['max_steps_per_episode']
+        self.learning_rate = hparams['learning_rate']
+        self.learning_frequency = hparams['learning_frequency']
+        self.learning_rate_decay_steps = hparams['learning_rate_decay_steps']
+        self.learning_rate_decay_rate = hparams['learning_rate_decay_rate']
+        self.update_frequency = hparams['update_frequency']
+        self.replay_buffer_size = hparams['replay_buffer_size']
+        self.prioritized_alpha = hparams['prioritized_alpha']
+        self.prioritized_beta = hparams['prioritized_beta']
+        self.prioritized_epsilon = hparams['prioritized_epsilon']
 
-    def get_action(self,
-                   observations,
-                   stochastic=True,
-                   update_epsilon=None):
-        """Function that choose an action given the observations
-        Argument
-        ------------
-            - observations. np.array. shape = [num_actions, fingerprint_length].
-                The next states.
-            - stochastic. Boolean.
-                If set to True, all the actions are always deterministic.
-            - head. Int.
-                The number of bootstrap heads.
-            - update_epsilon. Float or None.
-                Update the epsilon to a new value.
-        Return
-            - action.
-        """
-        if update_epsilon is not None:
-            self.epsilon = update_epsilon
+        self.losses = []
+        self.all_rewards = []
+        self.memory = None
+        self.beta_schedule = None
+        self.exploration = schedules.PiecewiseSchedule(
+            [(0, 1.0), (int(self.num_episodes / 2), 0.1),
+             (self.num_episodes, 0.01)], outside_value=0.01
+        )
 
-        if stochastic and np.random.uniform() < self.epsilon:
-            return np.random.randint(0, observations.shape[0])
+        # self.USE_CUDA = torch.cuda.is_available()
+        # self.Variable = lambda *args, **kwargs: autograd.Variable(*args, **kwargs).cuda() \
+        #     if self.USE_CUDA else autograd.Variable(*args, **kwargs)
+
+        self.DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        print(f'Device: {self.DEVICE}')
+
+        self.q_fn = q_fn.to(self.DEVICE)
+
+    def train(self):
+
+        global_step = 0
+
+        if self.prioritized:
+            self.memory = replay_buffer.PrioritizedReplayBuffer(self.replay_buffer_size, self.prioritized_alpha)
+            self.beta_schedule = schedules.LinearSchedule(self.num_episodes,
+                                                          initial_p=self.prioritized_beta, final_p=0)
         else:
-            return self._run_action(observations, self.hparams['num_bootstrap_head'])
+            self.memory = replay_buffer.ReplayBuffer(self.replay_buffer_size)
+            self.beta_schedule = None
 
-    def _run_action(self, observations, head):
-        """Run the network to get a result
-        Then pick an action based on policy"""
-        observations = self._get_tensor(observations)
-        self.q_fn.eval()
-        q_value = self.q_fn(observations)
-        # TODO enable Bootstrap
-        return int(q_value.argmax())
+        for episode in range(1, self.num_episodes + 1):
 
-    def _get_tensor(self, observations):
-        """Transfer a Mol observations into torch.Tensor"""
-        observations = np.vstack([
-            np.append(get_fingerprint(act, self.hparams), self.env.num_steps_taken)
-            for act in observations
-        ])
-        return torch.Tensor(observations).to(device)
+            global_step = self._episode(
+                episode,
+                global_step
+            )
+
+            # Plot result
+            # if episode % 20 == 0:
+                # self._plot(episode, self.all_rewards, self.losses)
+
+            # Save checkpoint
+            if episode % self.save_frequency == 0:
+                model_name = 'dqn_checkpoint_' + str(episode) + '.pth'
+                torch.save(self.q_fn.state_dict(), os.path.join(self.model_path, model_name))
+
+    def _episode(self,
+                 episode,
+                 global_step):
+
+        episode_start_time = time.time()
+        epsilon = self.exploration.value(episode)
+
+        state_mol, state_step = self.env.reset()
+        state = mol2fp(state_mol, state_step, self.hparams)
+
+        for step in range(self.max_steps_per_episode):
+
+            state, state_mol, state_step, reward, done = self._step(
+                state,
+                state_step,
+                epsilon
+            )
+
+            if done:
+
+                # logging.info('Episode %d/%d took %gs', episode, self.num_episodes, time.time() - episode_start_time)
+                # logging.info('SMIELS: %s\n', state)
+                # logging.info('The reward is: %s', str(reward))
+
+                print('Episode %d/%d took %gs' % (episode, self.num_episodes, time.time() - episode_start_time))
+                print('SMIELS: %s' % state_mol)
+                print('The reward is: %s\n' % str(reward))
+
+                self.all_rewards.append(reward)
+
+                # Log result
+                info = {
+                    'reward': reward
+                }
+                self._log_scalar(info, episode)
+
+            if self.replay_buffer_size > self.batch_size and (global_step % self.learning_frequency == 0):
+                td_error = self._compute_td_loss(self.batch_size)
+                self.losses.append(td_error)
+                logging.info('Current TD error: %.4f', np.mean(np.abs(td_error)))
+
+            global_step += 1
+
+        return global_step
+
+    def _step(self,
+              state,
+              state_step,
+              epsilon):
+
+        # Get valid actions
+        observations = list(self.env.get_valid_actions())
+
+        # State Embedding
+        observation_tensor = mol2fp(observations, state_step + 1, self.hparams).to(self.DEVICE)
+        action = self.q_fn.get_action(observation_tensor, observations, epsilon)
+
+        next_state_mol, next_state_step, reward, done = self.env.step(action)
+        next_state = mol2fp(next_state_mol, next_state_step, self.hparams)
+
+        # self.replay_buffer.push(state, 0, reward, next_state, done)
+
+        self.memory.add(
+            obs_t=state,
+            action=0,
+            reward=reward,
+            obs_tp1=next_state,
+            done=float(done)
+        )
+
+        return next_state, next_state_mol, next_state_step, reward, done
+
+    def _log_scalar(self, info, episode):
+        for tag, value in info.items():
+            self.logger.scalar_summary(tag, value, episode)
+
+    def _plot(self,
+              episode,
+              rewards,
+              losses):
+        # clear_output(True)
+        plt.figure(figsize=(20, 5))
+        plt.subplot(131)
+        plt.title('frame %s. reward: %s' % (episode, np.mean(rewards[-10:])))
+        plt.plot(rewards)
+        plt.subplot(132)
+        plt.title('loss')
+        plt.plot(losses)
+        plt.show()
+
+    def _compute_td_loss(self, batch_size):
+
+        # state, action, reward, next_state, done = self.replay_buffer.sample(batch_size)
+
+        if self.prioritized:
+            state, _, reward, next_state, done, weight, indices = \
+                self.memory.sample(batch_size, beta=self.beta_schedule)
+        else:
+            state, _, reward, next_state, done = self.memory.sample(batch_size)
+            weight = np.ones(reward.shape)
+            indices = 0
+
+        state = Variable(torch.FloatTensor(np.float32(state))).squeeze(1).to(self.DEVICE)
+        next_state = Variable(torch.FloatTensor(np.float32(next_state))).squeeze(1).to(self.DEVICE)
+        reward = Variable(torch.FloatTensor(reward)).to(self.DEVICE)
+        done = Variable(torch.FloatTensor(done)).to(self.DEVICE)
+
+        q_value = self.q_fn(state)
+        next_q_value = self.q_fn(next_state)
+
+        # q_value = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
+        # next_q_value = next_q_values.max(1)[0]
+        td_target = reward + self.gamma * next_q_value * (1 - done)
+
+        td_error = (q_value - Variable(td_target.data)).pow(2).mean()
+
+        self.optimizer.zero_grad()
+        td_error.backward()
+        self.optimizer.step()
+
+        if self.prioritized:
+            self.memory.update_priorities(indices, np.abs(np.squeeze(td_error) + self.prioritized_epsilon).tolist())
+
+        return td_error.data.item()
+
+    # def _epsilon_by_episode(self, episode):
+    #     epsilon_start = 1.0
+    #     epsilon_final = 0.01
+    #     epsilon_decay = 500
+    #     return epsilon_final + (epsilon_start - epsilon_final) * math.exp(-1. * episode / epsilon_decay)
 
 
+# class ReplayBuffer(object):
+#     def __init__(self, capacity):
+#         self.buffer = deque(maxlen=capacity)
+#
+#     def push(self, state, action, reward, next_state, done):
+#         state = np.expand_dims(state, 0)
+#         next_state = np.expand_dims(next_state, 0)
+#
+#         self.buffer.append((state, action, reward, next_state, done))
+#
+#     def sample(self, batch_size):
+#         state, action, reward, next_state, done = zip(*random.sample(self.buffer, batch_size))
+#         # return np.concatenate(state), action, reward, np.concatenate(next_state), done
+#         return np.concatenate(state), action, reward, np.concatenate(next_state), done
+#
+#     def __len__(self):
+#         return len(self.buffer)
 
 
+if __name__ == '__main__':
+    hparams = get_hparams('./configs/naive_dqn.json')
 
+    env = OptLogPMolecule(
+        atom_types=set(hparams['atom_types']),
+        allow_removal=hparams['allow_removal'],
+        allow_no_modification=hparams['allow_no_modification'],
+        allow_bonds_between_rings=hparams['allow_bonds_between_rings'],
+        allowed_ring_sizes=set(hparams['allowed_ring_sizes']),
+        max_steps=hparams['max_steps_per_episode']
+    )
 
-def compute_td_loss(batch_size):
-    state, action, reward, next_state, done = replay_buffer.sample(batch_size)
+    net = MultiLayerNetwork(hparams)
+    optimizer = optim.Adam(net.parameters())
+    # replay_buffer = ReplayBuffer(50)
 
-    state      = Variable(torch.FloatTensor(np.float32(state)))
-    next_state = Variable(torch.FloatTensor(np.float32(next_state)), volatile=True)
-    action     = Variable(torch.LongTensor(action))
-    reward     = Variable(torch.FloatTensor(reward))
-    done       = Variable(torch.FloatTensor(done))
-
-    q_values      = model(state)
-    next_q_values = model(next_state)
-
-    q_value          = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
-    next_q_value     = next_q_values.max(1)[0]
-    expected_q_value = reward + gamma * next_q_value * (1 - done)
-
-    loss = (q_value - Variable(expected_q_value.data)).pow(2).mean()
-
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-
-    return loss
+    dqn = DQLearning(
+        q_fn=net,
+        environment=env,
+        optimizer=optimizer,
+        # replay_buffer=replay_buffer,
+        hparams=hparams
+    )
+    dqn.train()
