@@ -26,7 +26,10 @@ class DQLearning:
                  optimizer,
                  hparams,
                  logger,
-                 model_path='./checkpoints'):
+                 model_path='./checkpoints',
+                 gen_epsilon=0.01,
+                 gen_file='./mol_gen.csv',
+                 gen_num_episode=100):
 
         self.hparams = hparams
         self.env = environment
@@ -57,14 +60,17 @@ class DQLearning:
         self.all_rewards = []
         self.memory = None
         self.beta_schedule = None
-        self.exploration = schedules.PiecewiseSchedule(
-            [(0, 1.0), (int(self.num_episodes / 2), 0.1),
-             (self.num_episodes, 0.01)], outside_value=0.01
-        )
 
-        # self.USE_CUDA = torch.cuda.is_available()
-        # self.Variable = lambda *args, **kwargs: autograd.Variable(*args, **kwargs).cuda() \
-        #     if self.USE_CUDA else autograd.Variable(*args, **kwargs)
+        # generation options
+        self.gen_epsilon = gen_epsilon
+        self.gen_file = gen_file
+        self.gen_num_episode = gen_num_episode
+
+        # epsilon-greedy exploration
+        self.exploration = schedules.PiecewiseSchedule(
+            [(0, 1.0), (int(self.num_episodes / 2), 0.1), (self.num_episodes, 0.01)],
+            outside_value=0.01
+        )
 
         self.DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         print(f'Device: {self.DEVICE}')
@@ -89,10 +95,6 @@ class DQLearning:
                 episode,
                 global_step
             )
-
-            # Plot result
-            # if episode % 20 == 0:
-                # self._plot(episode, self.all_rewards, self.losses)
 
             # Save checkpoint
             if episode % self.save_frequency == 0:
@@ -119,10 +121,6 @@ class DQLearning:
 
             if done:
 
-                # logging.info('Episode %d/%d took %gs', episode, self.num_episodes, time.time() - episode_start_time)
-                # logging.info('SMIELS: %s\n', state)
-                # logging.info('The reward is: %s', str(reward))
-
                 print('Episode %d/%d took %gs' % (episode, self.num_episodes, time.time() - episode_start_time))
                 print('SMIELS: %s' % state_mol)
                 print('The reward is: %s\n' % str(reward))
@@ -147,7 +145,8 @@ class DQLearning:
     def _step(self,
               state,
               state_step,
-              epsilon):
+              epsilon,
+              gen=False):
 
         # Get valid actions
         observations = list(self.env.get_valid_actions())
@@ -161,13 +160,14 @@ class DQLearning:
 
         # self.replay_buffer.push(state, 0, reward, next_state, done)
 
-        self.memory.add(
-            obs_t=state,
-            action=0,
-            reward=reward,
-            obs_tp1=next_state,
-            done=float(done)
-        )
+        if not gen:
+            self.memory.add(
+                obs_t=state,
+                action=0,
+                reward=reward,
+                obs_tp1=next_state,
+                done=float(done)
+            )
 
         return next_state, next_state_mol, next_state_step, reward, done
 
@@ -190,8 +190,6 @@ class DQLearning:
         plt.show()
 
     def _compute_td_loss(self, batch_size):
-
-        # state, action, reward, next_state, done = self.replay_buffer.sample(batch_size)
 
         if self.prioritized:
             state, _, reward, next_state, done, weight, indices = \
@@ -224,30 +222,31 @@ class DQLearning:
 
         return td_error.data.item()
 
-    # def _epsilon_by_episode(self, episode):
-    #     epsilon_start = 1.0
-    #     epsilon_final = 0.01
-    #     epsilon_decay = 500
-    #     return epsilon_final + (epsilon_start - epsilon_final) * math.exp(-1. * episode / epsilon_decay)
+    def generation(self):
+        with open(self.gen_file, 'wt') as f:
+            print('SMILES,reward', file=f)
+            for episode in range(1, self.gen_num_episode + 1):
 
+                episode_start_time = time.time()
 
-# class ReplayBuffer(object):
-#     def __init__(self, capacity):
-#         self.buffer = deque(maxlen=capacity)
-#
-#     def push(self, state, action, reward, next_state, done):
-#         state = np.expand_dims(state, 0)
-#         next_state = np.expand_dims(next_state, 0)
-#
-#         self.buffer.append((state, action, reward, next_state, done))
-#
-#     def sample(self, batch_size):
-#         state, action, reward, next_state, done = zip(*random.sample(self.buffer, batch_size))
-#         # return np.concatenate(state), action, reward, np.concatenate(next_state), done
-#         return np.concatenate(state), action, reward, np.concatenate(next_state), done
-#
-#     def __len__(self):
-#         return len(self.buffer)
+                state_mol, state_step = self.env.reset()
+                state = mol2fp(state_mol, state_step, self.hparams)
+
+                for step in range(self.max_steps_per_episode):
+
+                    state, state_mol, state_step, reward, done = self._step(
+                        state,
+                        state_step,
+                        self.gen_epsilon,
+                        gen=True
+                    )
+
+                    if done:
+                        print('Episode %d/%d took %gs' % (episode, self.gen_num_episode, time.time() - episode_start_time))
+                        print('SMIELS: %s' % state_mol)
+                        print('The reward is: %s\n' % str(reward))
+
+                        print(str(state_mol) + ',' + str(reward), file=f)
 
 
 if __name__ == '__main__':
@@ -264,7 +263,6 @@ if __name__ == '__main__':
 
     net = MultiLayerNetwork(hparams)
     optimizer = optim.Adam(net.parameters())
-    # replay_buffer = ReplayBuffer(50)
 
     dqn = DQLearning(
         q_fn=net,

@@ -15,7 +15,11 @@ if __name__ == '__main__':
                         help='The network parameters to begin with.')
     parser.add_argument('--hparams', default='./configs/naive_dqn.json',
                         help='The JSON file define teh hyper parameters.')
+    parser.add_argument('-g', '--gen_path', default='./gen_mol',
+                        help='The file to store the generated molecules.')
     args = parser.parse_args()
+
+    DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     if args.hparams is not None:
         hparams = get_hparams(args.hparams)
@@ -33,7 +37,7 @@ if __name__ == '__main__':
 
     model = MultiLayerNetwork(hparams)
     if args.parameters is not None:
-        model.load_state_dict(torch.load(args.parameters))
+        model.load_state_dict(torch.load(args.parameters, map_location=DEVICE))
 
     optimizer = optim.Adam(model.parameters())
     logger = Logger()
@@ -43,6 +47,9 @@ if __name__ == '__main__':
         environment=env,
         optimizer=optimizer,
         logger=logger,
-        hparams=hparams
+        hparams=hparams,
+        gen_epsilon=0.1,
+        gen_file='./mol_gen.csv',
+        gen_num_episode=50
     )
-    dqn.train()
+    dqn.generation()
