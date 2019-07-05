@@ -1,18 +1,21 @@
 """Run the DQN"""
+import os
 import torch
 import torch.optim as optim
 from utils.functions import get_hparams
 from environments.envs import OptLogPMolecule
 from model.networks import MultiLayerNetwork
 from model.DQN import DQLearning
-from logger import Logger
 import argparse
+from tensorboardX import SummaryWriter
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Trigger the DQN training process.')
     parser.add_argument('-p', '--parameters', default=None,
                         help='The network parameters to begin with.')
+    parser.add_argument('-t', '--task', default='test',
+                        help='The task name.')
     parser.add_argument('--hparams', default='./configs/naive_dqn.json',
                         help='The JSON file define teh hyper parameters.')
     args = parser.parse_args()
@@ -36,13 +39,21 @@ if __name__ == '__main__':
         model.load_state_dict(torch.load(args.parameters))
 
     optimizer = optim.Adam(model.parameters())
-    logger = Logger()
+
+    log_path = os.path.join('./checkpoints/', args.task)
+    writer = SummaryWriter(log_path)
 
     dqn = DQLearning(
+        task=args.task,
         q_fn=model,
         environment=env,
         optimizer=optimizer,
-        logger=logger,
-        hparams=hparams
+        writer=writer,
+        hparams=hparams,
+        double=True,
+        model_path=log_path,
+        gen_epsilon=0.01,
+        gen_file='./mol_gen.csv',
+        gen_num_episode=100
     )
     dqn.train()

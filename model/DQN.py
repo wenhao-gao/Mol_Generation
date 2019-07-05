@@ -1,15 +1,18 @@
 """The Deep Q Learning Process"""
 
 import numpy as np
-from absl import logging
 import time
 import os
+import copy
 
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import Variable
 
 import matplotlib.pyplot as plt
+from rdkit.Chem import Draw
+from rdkit import Chem
 
 from environments.envs import OptLogPMolecule
 from model.networks import MultiLayerNetwork, mol2fp
@@ -21,21 +24,26 @@ from utils.functions import get_hparams
 class DQLearning:
 
     def __init__(self,
+                 task,
                  q_fn,
                  environment,
                  optimizer,
                  hparams,
-                 logger,
+                 writer,
+                 keep=10,
+                 double=True,
                  model_path='./checkpoints',
                  gen_epsilon=0.01,
                  gen_file='./mol_gen.csv',
                  gen_num_episode=100):
 
+        self.task = task
         self.hparams = hparams
         self.env = environment
         self.optimizer = optimizer
-        self.logger = logger
+        self.writer = writer
         self.model_path = model_path
+        self.double = double
 
         if not os.path.exists(self.model_path):
             os.makedirs(model_path)
@@ -60,6 +68,9 @@ class DQLearning:
         self.all_rewards = []
         self.memory = None
         self.beta_schedule = None
+        self.smiles = []
+        self.keep_criterion = -99999.9
+        self.keep = keep
 
         # generation options
         self.gen_epsilon = gen_epsilon
@@ -76,6 +87,8 @@ class DQLearning:
         print(f'Device: {self.DEVICE}')
 
         self.q_fn = q_fn.to(self.DEVICE)
+        if self.double:
+            self.q_fn_target = copy.deepcopy(self.q_fn)
 
     def train(self):
 
@@ -127,16 +140,23 @@ class DQLearning:
 
                 self.all_rewards.append(reward)
 
-                # Log result
-                info = {
-                    'reward': reward
-                }
-                self._log_scalar(info, episode)
+                # Keep track the result
+                if reward > self.keep_criterion:
+                    self.update_tracking(state_mol, reward, global_step)
 
-            if self.replay_buffer_size > self.batch_size and (global_step % self.learning_frequency == 0):
+                # Log result
+                self.writer.add_scalar('reward', reward, global_step)
+
+            if len(self.memory) > self.batch_size and (global_step % self.learning_frequency == 0):
                 td_error = self._compute_td_loss(self.batch_size)
                 self.losses.append(td_error)
-                logging.info('Current TD error: %.4f', np.mean(np.abs(td_error)))
+                print('Current TD error: %.4f' % np.mean(np.abs(td_error)))
+                # Log result
+                self.writer.add_scalar('td_error', td_error, global_step)
+
+                if self.double:
+                    if global_step % self.learning_frequency == 0:
+                        self.q_fn_target.load_state_dict(self.q_fn.state_dict())
 
             global_step += 1
 
@@ -158,8 +178,6 @@ class DQLearning:
         next_state_mol, next_state_step, reward, done = self.env.step(action)
         next_state = mol2fp(next_state_mol, next_state_step, self.hparams)
 
-        # self.replay_buffer.push(state, 0, reward, next_state, done)
-
         if not gen:
             self.memory.add(
                 obs_t=state,
@@ -170,24 +188,6 @@ class DQLearning:
             )
 
         return next_state, next_state_mol, next_state_step, reward, done
-
-    def _log_scalar(self, info, episode):
-        for tag, value in info.items():
-            self.logger.scalar_summary(tag, value, episode)
-
-    def _plot(self,
-              episode,
-              rewards,
-              losses):
-        # clear_output(True)
-        plt.figure(figsize=(20, 5))
-        plt.subplot(131)
-        plt.title('frame %s. reward: %s' % (episode, np.mean(rewards[-10:])))
-        plt.plot(rewards)
-        plt.subplot(132)
-        plt.title('loss')
-        plt.plot(losses)
-        plt.show()
 
     def _compute_td_loss(self, batch_size):
 
@@ -204,17 +204,24 @@ class DQLearning:
         reward = Variable(torch.FloatTensor(reward)).to(self.DEVICE)
         done = Variable(torch.FloatTensor(done)).to(self.DEVICE)
 
-        q_value = self.q_fn(state)
-        next_q_value = self.q_fn(next_state)
+        q_value = self.q_fn(state).squeeze()
+
+        if self.double:
+            next_q_value = self.q_fn_target(next_state)
+        else:
+            next_q_value = self.q_fn(next_state)
 
         # q_value = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
         # next_q_value = next_q_values.max(1)[0]
-        td_target = reward + self.gamma * next_q_value * (1 - done)
+        td_target = reward + self.gamma * next_q_value.squeeze() * (1 - done)
+        td_target = Variable(td_target.data)
 
-        td_error = (q_value - Variable(td_target.data)).pow(2).mean()
+        td_error = (q_value - td_target).pow(2).mean()
+
+        loss = F.smooth_l1_loss(q_value, td_target)
 
         self.optimizer.zero_grad()
-        td_error.backward()
+        loss.backward()
         self.optimizer.step()
 
         if self.prioritized:
@@ -248,6 +255,36 @@ class DQLearning:
 
                         print(str(state_mol) + ',' + str(reward), file=f)
 
+    def update_tracking(self, mol, reward, step):
+
+        if len(self.smiles) == self.keep:
+            del self.smiles[0]
+
+        if len(self.smiles) == 0:
+            self.smiles = [(mol, reward)]
+        else:
+            for i, sample in enumerate(self.smiles):
+                smiles, r = sample
+                if reward > r:
+                    self.smiles = self.smiles[:i] + [(mol, reward)] + self.smiles[i:]
+                    break
+
+        self.keep_criterion = self.smiles[-1][1]
+
+        smiles_ = []
+        r_ = []
+        for sample in self.smiles:
+            smiles, r = sample
+            smiles_.append(Chem.MolFromSmiles(smiles))
+            r_.append(str(r))
+            self.writer.add_text('SMILES reward', smiles + ' Reward: ' + str(r), step)
+
+        # img = Draw.MolsToGridImage(smiles_, molsPerRow=5, subImgSize=(200, 200), legends=r_)
+        # img = np.array(img)
+        # self.writer.add_figure('Molecules generated', img, step)
+
+        return None
+
 
 if __name__ == '__main__':
     hparams = get_hparams('./configs/naive_dqn.json')
@@ -268,7 +305,6 @@ if __name__ == '__main__':
         q_fn=net,
         environment=env,
         optimizer=optimizer,
-        # replay_buffer=replay_buffer,
         hparams=hparams
     )
     dqn.train()
