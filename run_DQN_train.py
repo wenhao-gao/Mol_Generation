@@ -50,7 +50,7 @@ if __name__ == '__main__':
         optimizer=optimizer,
         writer=writer,
         hparams=hparams,
-        double=True,
+        double=False,
         model_path=log_path,
         gen_epsilon=0.01,
         gen_file='./mol_gen.csv',

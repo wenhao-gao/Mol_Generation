@@ -6,8 +6,8 @@ from utils.functions import get_hparams
 from environments.envs import OptLogPMolecule
 from model.networks import MultiLayerNetwork
 from model.DQN import DQLearning
-from logger import Logger
 import argparse
+from tensorboardX import SummaryWriter
 
 
 if __name__ == '__main__':
@@ -41,16 +41,14 @@ if __name__ == '__main__':
     optimizer = optim.Adam(model.parameters())
 
     log_path = os.path.join('./checkpoints/', args.task)
-    if not os.path.exists(log_path):
-        os.makedirs(log_path)
-    logger = Logger(log_path)
+    writer = SummaryWriter(log_path)
 
     dqn = DQLearning(
         task=args.task,
         q_fn=model,
         environment=env,
         optimizer=optimizer,
-        logger=logger,
+        writer=writer,
         hparams=hparams,
         double=True,
         model_path=log_path,
@@ -59,4 +57,3 @@ if __name__ == '__main__':
         gen_num_episode=100
     )
     dqn.train()
-
