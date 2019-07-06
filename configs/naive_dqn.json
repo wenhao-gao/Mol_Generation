@@ -1,6 +1,6 @@
 {
   "atom_types": ["C", "O", "N"],
-  "max_steps_per_episode": 50,
+  "max_steps_per_episode": 40,
   "allow_removal": true,
   "allow_no_modification": true,
   "allow_bonds_between_rings": false,
@@ -8,7 +8,7 @@
   "fingerprint_radius": 3,
   "fingerprint_length": 2048,
 
-  "num_episodes": 300,
+  "num_episodes": 5000,
   "batch_size": 128,
 
   "dense_layers": [1024, 512, 128, 32],
@@ -20,7 +20,7 @@
   "learning_rate_decay_rate": 0.9,
   "learning_frequency": 4,
   "replay_buffer_size": 5000,
-  "update_frequency": 2,
+  "update_frequency": 20,
 
   "grad_clipping": 10,
   "gamma": 1.0,

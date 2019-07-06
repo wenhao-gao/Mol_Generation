@@ -63,6 +63,7 @@ class DQLearning:
         self.prioritized_alpha = hparams['prioritized_alpha']
         self.prioritized_beta = hparams['prioritized_beta']
         self.prioritized_epsilon = hparams['prioritized_epsilon']
+        self.grad_clipping = hparams['grad_clipping']
 
         self.losses = []
         self.all_rewards = []
@@ -154,9 +155,8 @@ class DQLearning:
                 # Log result
                 self.writer.add_scalar('td_error', td_error, global_step)
 
-                if self.double:
-                    if global_step % self.learning_frequency == 0:
-                        self.q_fn_target.load_state_dict(self.q_fn.state_dict())
+                if self.double and (episode % self.update_frequency == 0):
+                    self.q_fn_target.load_state_dict(self.q_fn.state_dict())
 
             global_step += 1
 
@@ -222,6 +222,7 @@ class DQLearning:
 
         self.optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm(self.q_fn.parameters(), self.grad_clipping)
         self.optimizer.step()
 
         if self.prioritized:
@@ -257,12 +258,15 @@ class DQLearning:
 
     def update_tracking(self, mol, reward, step):
 
-        if len(self.smiles) == self.keep:
-            del self.smiles[0]
-
         if len(self.smiles) == 0:
+
             self.smiles = [(mol, reward)]
+
         else:
+
+            if len(self.smiles) == self.keep:
+                del self.smiles[0]
+
             for i, sample in enumerate(self.smiles):
                 smiles, r = sample
                 if reward > r:
