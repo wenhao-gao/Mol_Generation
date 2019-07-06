@@ -70,6 +70,15 @@ class OptLogPMolecule(mol_env.Molecule):
         return mol_utils.penalized_logp(molecule)
 
 
+class ScaleOptLogPMolecule(mol_env.Molecule):
+
+    def _reward(self):
+        molecule = Chem.MolFromSmiles(self._state)
+        if molecule is None:
+            return 0.0
+        return 0.1 * mol_utils.penalized_logp(molecule)
+
+
 class TargetSASMolecule(mol_env.Molecule):
     """Target SAS reward Molecule."""
 

@@ -264,23 +264,23 @@ class DQLearning:
 
         else:
 
-            if len(self.smiles) == self.keep:
-                del self.smiles[0]
-
+            add = False
             for i, sample in enumerate(self.smiles):
-                smiles, r = sample
-                if reward > r:
+                smi, rwd = sample
+                if reward > rwd:
                     self.smiles = self.smiles[:i] + [(mol, reward)] + self.smiles[i:]
+                    add = True
                     break
+            if not add:
+                self.smiles.append((mol, reward))
+
+            if len(self.smiles) > self.keep:
+                self.smiles = self.smiles[:self.keep]
 
         self.keep_criterion = self.smiles[-1][1]
 
-        smiles_ = []
-        r_ = []
         for sample in self.smiles:
             smiles, r = sample
-            smiles_.append(Chem.MolFromSmiles(smiles))
-            r_.append(str(r))
             self.writer.add_text('SMILES reward', smiles + ' Reward: ' + str(r), step)
 
         # img = Draw.MolsToGridImage(smiles_, molsPerRow=5, subImgSize=(200, 200), legends=r_)
