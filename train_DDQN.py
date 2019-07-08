@@ -1,12 +1,12 @@
 """Run the DQN"""
 import os
+import argparse
 import torch
 import torch.optim as optim
+import environments.envs as envs
 from utils.functions import get_hparams
-from environments.envs import ScaleOptLogPMolecule
 from model.networks import MultiLayerNetwork
 from model.DQN import DQLearning
-import argparse
 from tensorboardX import SummaryWriter
 
 
@@ -20,6 +20,8 @@ if __name__ == '__main__':
                         help='The task name.')
     parser.add_argument('--hparams', default='./configs/naive_dqn.json',
                         help='The JSON file define teh hyper parameters.')
+    parser.add_argument('-i', '--init_mol', default='C',
+                        help='The initial molecule to start with.')
 
     args = parser.parse_args()
 
@@ -28,7 +30,9 @@ if __name__ == '__main__':
     else:
         hparams = get_hparams()
 
-    env = ScaleOptLogPMolecule(
+    env = envs.OptQEDMolecule(
+        discount_factor=hparams['discount_factor'],
+        init_mol=args.init_mol,
         atom_types=set(hparams['atom_types']),
         allow_removal=hparams['allow_removal'],
         allow_no_modification=hparams['allow_no_modification'],

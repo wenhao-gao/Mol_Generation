@@ -30,7 +30,7 @@ class DQLearning:
                  optimizer,
                  hparams,
                  writer,
-                 keep=10,
+                 keep=5,
                  double=True,
                  model_path='./checkpoints',
                  gen_epsilon=0.01,
@@ -148,7 +148,8 @@ class DQLearning:
                 # Log result
                 self.writer.add_scalar('reward', reward, global_step)
 
-            if len(self.memory) > self.batch_size and (global_step % self.learning_frequency == 0):
+            # if len(self.memory) > self.batch_size and (global_step % self.learning_frequency == 0):
+            if (episode > min(50, self.num_episodes / 10)) and (global_step % self.learning_frequency == 0):
                 td_error = self._compute_td_loss(self.batch_size)
                 self.losses.append(td_error)
                 print('Current TD error: %.4f' % np.mean(np.abs(td_error)))
@@ -258,24 +259,18 @@ class DQLearning:
 
     def update_tracking(self, mol, reward, step):
 
-        if len(self.smiles) == 0:
+        add = False
+        for i, sample in enumerate(self.smiles):
+            smi, rwd = sample
+            if reward > rwd:
+                self.smiles = self.smiles[:i] + [(mol, reward)] + self.smiles[i:]
+                add = True
+                break
+        if not add:
+            self.smiles.append((mol, reward))
 
-            self.smiles = [(mol, reward)]
-
-        else:
-
-            add = False
-            for i, sample in enumerate(self.smiles):
-                smi, rwd = sample
-                if reward > rwd:
-                    self.smiles = self.smiles[:i] + [(mol, reward)] + self.smiles[i:]
-                    add = True
-                    break
-            if not add:
-                self.smiles.append((mol, reward))
-
-            if len(self.smiles) > self.keep:
-                self.smiles = self.smiles[:self.keep]
+        if len(self.smiles) > self.keep:
+            self.smiles = self.smiles[:self.keep]
 
         self.keep_criterion = self.smiles[-1][1]
 

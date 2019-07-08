@@ -6,7 +6,7 @@ from rdkit import DataStructs
 from rdkit.Chem import AllChem
 
 
-def get_hparams(path_to_json):
+def get_hparams(*args):
     """Function to read hyper parameters"""
     # Default setting
     hparams = {
@@ -42,7 +42,7 @@ def get_hparams(path_to_json):
         'max_num_checkpoints': 100,
         'discount_factor': 0.7
     }
-    with open(path_to_json, 'r') as f:
+    with open(args[0], 'r') as f:
         hparams.update(json.load(f))
     return hparams
 

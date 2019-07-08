@@ -1,12 +1,14 @@
 """Run the DQN"""
+import os
+import argparse
 import torch
 import torch.optim as optim
+import environments.envs as envs
 from utils.functions import get_hparams
-from environments.envs import OptLogPMolecule
 from model.networks import MultiLayerNetwork
 from model.DQN import DQLearning
-from logger import Logger
-import argparse
+from tensorboardX import SummaryWriter
+
 
 
 if __name__ == '__main__':
@@ -26,7 +28,7 @@ if __name__ == '__main__':
     else:
         hparams = get_hparams()
 
-    env = OptLogPMolecule(
+    env = envs.OptLogPMolecule(
         atom_types=set(hparams['atom_types']),
         allow_removal=hparams['allow_removal'],
         allow_no_modification=hparams['allow_no_modification'],
@@ -40,13 +42,14 @@ if __name__ == '__main__':
         model.load_state_dict(torch.load(args.parameters, map_location=DEVICE))
 
     optimizer = optim.Adam(model.parameters())
-    logger = Logger()
+    log_path = os.path.join('./checkpoints/', args.task)
+    writer = SummaryWriter(log_path)
 
     dqn = DQLearning(
         q_fn=model,
         environment=env,
         optimizer=optimizer,
-        logger=logger,
+        writer=writer,
         hparams=hparams,
         gen_epsilon=0.1,
         gen_file='./mol_gen.csv',
