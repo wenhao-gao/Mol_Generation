@@ -2,13 +2,11 @@
 import os
 import argparse
 import torch
-import torch.optim as optim
 import environments.envs as envs
 from utils.functions import get_hparams
 from model.networks import MultiLayerNetwork
 from model.DQN import DQLearning
 from tensorboardX import SummaryWriter
-
 
 
 if __name__ == '__main__':
@@ -41,18 +39,20 @@ if __name__ == '__main__':
     if args.parameters is not None:
         model.load_state_dict(torch.load(args.parameters, map_location=DEVICE))
 
-    optimizer = optim.Adam(model.parameters())
-    log_path = os.path.join('./checkpoints/', args.task)
+    log_path = os.path.join(args.gen_path, args.task)
     writer = SummaryWriter(log_path)
+
+    if not os.path.exists(args.gen_path):
+        os.makedirs(args.gen_path)
+    gen_file = os.path.join(args.gen_path, 'mol_gen.csv')
 
     dqn = DQLearning(
         q_fn=model,
         environment=env,
-        optimizer=optimizer,
         writer=writer,
         hparams=hparams,
-        gen_epsilon=0.1,
-        gen_file='./mol_gen.csv',
-        gen_num_episode=50
+        gen_epsilon=hparams['gen_epsilon'],
+        gen_file=gen_file,
+        gen_num_episode=hparams['gen_number']
     )
     dqn.generation()

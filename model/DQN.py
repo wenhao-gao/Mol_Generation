@@ -27,11 +27,11 @@ class DQLearning:
                  task,
                  q_fn,
                  environment,
-                 optimizer,
                  hparams,
                  writer,
+                 optimizer=None,
+                 lr_schedule=None,
                  keep=5,
-                 double=True,
                  model_path='./checkpoints',
                  gen_epsilon=0.01,
                  gen_file='./mol_gen.csv',
@@ -43,11 +43,23 @@ class DQLearning:
         self.optimizer = optimizer
         self.writer = writer
         self.model_path = model_path
-        self.double = double
+        self.lr_schedule = lr_schedule
+        self.losses = []
+        self.all_rewards = []
+        self.memory = None
+        self.beta_schedule = None
+        self.smiles = []
+        self.keep_criterion = -99999.9
+        self.keep = keep
+        # generation options
+        self.gen_epsilon = gen_epsilon
+        self.gen_file = gen_file
+        self.gen_num_episode = gen_num_episode
 
         if not os.path.exists(self.model_path):
             os.makedirs(model_path)
 
+        self.double = hparams['double_q']
         self.num_episodes = hparams['num_episodes']
         self.batch_size = hparams['batch_size']
         self.gamma = hparams['gamma']
@@ -65,20 +77,7 @@ class DQLearning:
         self.prioritized_epsilon = hparams['prioritized_epsilon']
         self.grad_clipping = hparams['grad_clipping']
 
-        self.losses = []
-        self.all_rewards = []
-        self.memory = None
-        self.beta_schedule = None
-        self.smiles = []
-        self.keep_criterion = -99999.9
-        self.keep = keep
-
-        # generation options
-        self.gen_epsilon = gen_epsilon
-        self.gen_file = gen_file
-        self.gen_num_episode = gen_num_episode
-
-        # epsilon-greedy exploration
+        # epsilon-greedy exploration schedule
         self.exploration = schedules.PiecewiseSchedule(
             [(0, 1.0), (int(self.num_episodes / 2), 0.1), (self.num_episodes, 0.01)],
             outside_value=0.01
@@ -148,8 +147,9 @@ class DQLearning:
                 # Log result
                 self.writer.add_scalar('reward', reward, global_step)
 
-            # if len(self.memory) > self.batch_size and (global_step % self.learning_frequency == 0):
             if (episode > min(50, self.num_episodes / 10)) and (global_step % self.learning_frequency == 0):
+                if (global_step % self.learning_rate_decay_steps == 0) and (self.lr_schedule is not None):
+                    self.lr_schedule.step()
                 td_error = self._compute_td_loss(self.batch_size)
                 self.losses.append(td_error)
                 print('Current TD error: %.4f' % np.mean(np.abs(td_error)))
