@@ -173,18 +173,23 @@ class DQLearning:
         observations = list(self.env.get_valid_actions())
 
         # State Embedding
-        observation_tensor = mol2fp(observations, state_step + 1, self.hparams).to(self.DEVICE)
+        observation_tensor = mol2fp(observations, state_step, self.hparams).to(self.DEVICE)
         action = self.q_fn.get_action(observation_tensor, observations, epsilon)
 
+        state_tensor = mol2fp(action, state_step + 1, self.hparams)
+
         next_state_mol, next_state_step, reward, done = self.env.step(action)
-        next_state = mol2fp(next_state_mol, next_state_step, self.hparams)
+        next_state = mol2fp(next_state_mol, next_state_step, self.hparams).to(self.DEVICE)
+
+        next_observations = list(self.env.get_valid_actions())
+        observation_tensor = mol2fp(next_observations, next_state_step, self.hparams)
 
         if not gen:
             self.memory.add(
-                obs_t=state,
+                obs_t=state_tensor.numpy(),
                 action=0,
                 reward=reward,
-                obs_tp1=next_state,
+                obs_tp1=observation_tensor.numpy(),
                 done=float(done)
             )
 
@@ -193,29 +198,40 @@ class DQLearning:
     def _compute_td_loss(self, batch_size):
 
         if self.prioritized:
-            state, _, reward, next_state, done, weight, indices = \
+            state, _, reward, next_states, done, weight, indices = \
                 self.memory.sample(batch_size, beta=self.beta_schedule)
         else:
-            state, _, reward, next_state, done = self.memory.sample(batch_size)
+            state, _, reward, next_states, done = self.memory.sample(batch_size)
             weight = np.ones(reward.shape)
             indices = 0
 
         state = Variable(torch.FloatTensor(np.float32(state))).squeeze(1).to(self.DEVICE)
-        next_state = Variable(torch.FloatTensor(np.float32(next_state))).squeeze(1).to(self.DEVICE)
+        next_states = [
+            Variable(torch.FloatTensor(np.float32(next_state))).to(self.DEVICE)
+            for next_state in next_states
+        ]
         reward = Variable(torch.FloatTensor(reward)).to(self.DEVICE)
         done = Variable(torch.FloatTensor(done)).to(self.DEVICE)
 
-        q_value = self.q_fn(state).squeeze()
+        q_value = self.q_fn(state).squeeze()  # tensor batch_size*num_head
+
+        q_tp1_online = [self.q_fn(state) for state in next_states]  # batch list of num_observation*num_heads
 
         if self.double:
-            next_q_value = self.q_fn_target(next_state)
-        else:
-            next_q_value = self.q_fn(next_state)
 
-        # q_value = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
-        # next_q_value = next_q_values.max(1)[0]
-        td_target = reward + self.gamma * next_q_value.squeeze() * (1 - done)
-        td_target = Variable(td_target.data)
+            q_tp1 = [self.q_fn_target(state) for state in next_states]  # batch list of num_observation*num_heads
+            next_q_value = torch.stack(
+                [q.gather(0, torch.max(q_online, 0)[1].unsqueeze(0)) for q, q_online in zip(q_tp1, q_tp1_online)],
+                dim=0
+            )
+
+        else:
+            next_q_value = torch.stack(
+                [q.gather(0, torch.max(q, 0)[1].unsqueeze(0)) for q in q_tp1_online],
+                dim=0
+            )
+
+        td_target = Variable(reward + self.gamma * next_q_value.squeeze() * (1 - done))
 
         td_error = (q_value - td_target).pow(2).mean()
 
