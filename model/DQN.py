@@ -10,10 +10,6 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import Variable
 
-import matplotlib.pyplot as plt
-from rdkit.Chem import Draw
-from rdkit import Chem
-
 from environments.envs import OptLogPMolecule
 from model.networks import MultiLayerNetwork, mol2fp
 from utils import replay_buffer
@@ -217,13 +213,21 @@ class DQLearning:
 
         q_value = self.q_fn(state).squeeze()  # tensor batch_size*num_head
 
-        q_tp1_online = [self.q_fn(state) for state in next_states]  # batch list of num_observation*num_heads
+        q_tp1_online = [self.q_fn(state).squeeze() for state in next_states]  # batch list of num_observation*num_heads
 
         if self.double:
 
-            q_tp1 = [self.q_fn_target(state) for state in next_states]  # batch list of num_observation*num_heads
+            q_tp1 = [self.q_fn_target(state).squeeze() for state in next_states]  # batch list of num_observation*num_heads
+
+            q_tp1_online_idx = [
+                torch.stack(
+                    [torch.argmax(q, dim=0), torch.range(0, self.num_bootstrap_heads - 1, dtype=torch.int64)],
+                    dim=1
+                ) for q in q_tp1_online
+            ]
+
             next_q_value = torch.stack(
-                [q.gather(0, torch.max(q_online, 0)[1].unsqueeze(0)) for q, q_online in zip(q_tp1, q_tp1_online)],
+                [q[idx[:, 0], idx[:, 1]] for q, idx in zip(q_tp1, q_tp1_online_idx)],
                 dim=0
             )
 
@@ -234,13 +238,20 @@ class DQLearning:
             )
 
         done_mask = 1 - done
-        masked_next_q = next_q_value.squeeze() * done_mask
-        td_target = Variable(reward + self.gamma * masked_next_q)
+        masked_next_q = next_q_value * done_mask.unsqueeze(1)
+        td_target = Variable(reward.unsqueeze(1) + self.gamma * masked_next_q)
         td_error = (q_value - td_target).pow(2)
-        prios = td_error.data + self.prioritized_epsilon
         td_error = td_error.mean()
 
         loss = F.smooth_l1_loss(q_value, td_target, reduction='none')
+
+        if self.num_bootstrap_heads > 1:
+            head_mask = torch.Tensor(np.random.binomial(1, 0.6, self.num_bootstrap_heads))
+            loss = loss * head_mask
+            loss = loss.mean(1)
+
+        prios = loss.data + self.prioritized_epsilon
+
         loss = loss.mul(torch.FloatTensor(weight)).mean()
 
         self.optimizer.zero_grad()
