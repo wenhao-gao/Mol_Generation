@@ -251,7 +251,7 @@ class DQLearning:
             loss = loss * head_mask
             loss = loss.mean(1)
 
-        prios = loss.data + self.prioritized_epsilon
+        prios = loss.data.cpu().numpy() + self.prioritized_epsilon
 
         loss = loss.mul(torch.FloatTensor(weight).to(self.DEVICE)).mean()
 

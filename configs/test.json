@@ -10,7 +10,7 @@
   "gamma": 1.0,
   "discount_factor": 0.9,
 
-  "num_episodes": 500,
+  "num_episodes": 50,
   "replay_buffer_size": 5000,
   "batch_size": 4,
   "double_q": true,
