@@ -221,7 +221,7 @@ class DQLearning:
 
             q_tp1_online_idx = [
                 torch.stack(
-                    [torch.argmax(q, dim=0), torch.range(0, self.num_bootstrap_heads - 1, dtype=torch.int64)],
+                    [torch.argmax(q, dim=0), torch.range(0, self.num_bootstrap_heads - 1, dtype=torch.int64).to(self.DEVICE)],
                     dim=1
                 ) for q in q_tp1_online
             ]
@@ -246,13 +246,13 @@ class DQLearning:
         loss = F.smooth_l1_loss(q_value, td_target, reduction='none')
 
         if self.num_bootstrap_heads > 1:
-            head_mask = torch.Tensor(np.random.binomial(1, 0.6, self.num_bootstrap_heads))
+            head_mask = torch.Tensor(np.random.binomial(1, 0.6, self.num_bootstrap_heads)).to(self.DEVICE)
             loss = loss * head_mask
             loss = loss.mean(1)
 
         prios = loss.data + self.prioritized_epsilon
 
-        loss = loss.mul(torch.FloatTensor(weight)).mean()
+        loss = loss.mul(torch.FloatTensor(weight).to(self.DEVICE)).mean()
 
         self.optimizer.zero_grad()
         loss.backward()
