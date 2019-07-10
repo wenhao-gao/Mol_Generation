@@ -18,7 +18,7 @@ if __name__ == '__main__':
                         help='The network parameters to begin with.')
     parser.add_argument('-t', '--task', default='test',
                         help='The task name.')
-    parser.add_argument('--hparams', default='./configs/naive_dqn.json',
+    parser.add_argument('--hparams', default='./configs/test.json',
                         help='The JSON file define teh hyper parameters.')
     parser.add_argument('-i', '--init_mol', default='C',
                         help='The initial molecule to start with.')

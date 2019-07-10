@@ -4,7 +4,7 @@
   "allow_removal": true,
   "allow_no_modification": true,
   "allow_bonds_between_rings": false,
-  "allowed_ring_sizes": [5, 6],
+  "allowed_ring_sizes": [5, 6, 7],
   "fingerprint_radius": 3,
   "fingerprint_length": 2048,
   "gamma": 1.0,

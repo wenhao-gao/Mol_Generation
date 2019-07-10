@@ -76,6 +76,7 @@ class DQLearning:
         self.prioritized_beta = hparams['prioritized_beta']
         self.prioritized_epsilon = hparams['prioritized_epsilon']
         self.grad_clipping = hparams['grad_clipping']
+        self.num_bootstrap_heads = hparams['num_bootstrap_heads']
 
         # epsilon-greedy exploration schedule
         self.exploration = schedules.PiecewiseSchedule(
@@ -123,13 +124,14 @@ class DQLearning:
 
         state_mol, state_step = self.env.reset()
         state = mol2fp(state_mol, state_step, self.hparams)
+        head = np.random.randint(self.num_bootstrap_heads)
 
         for step in range(self.max_steps_per_episode):
 
             state, state_mol, state_step, reward, done = self._step(
-                state,
                 state_step,
-                epsilon
+                epsilon,
+                head
             )
 
             if done:
@@ -150,7 +152,7 @@ class DQLearning:
             if (episode > min(50, self.num_episodes / 10)) and (global_step % self.learning_frequency == 0):
                 if (global_step % self.learning_rate_decay_steps == 0) and (self.lr_schedule is not None):
                     self.lr_schedule.step()
-                td_error = self._compute_td_loss(self.batch_size)
+                td_error = self._compute_td_loss(self.batch_size, episode)
                 self.losses.append(td_error)
                 print('Current TD error: %.4f' % np.mean(np.abs(td_error)))
                 # Log result
@@ -164,9 +166,9 @@ class DQLearning:
         return global_step
 
     def _step(self,
-              state,
               state_step,
               epsilon,
+              head,
               gen=False):
 
         # Get valid actions
@@ -174,7 +176,7 @@ class DQLearning:
 
         # State Embedding
         observation_tensor = mol2fp(observations, state_step, self.hparams).to(self.DEVICE)
-        action = self.q_fn.get_action(observation_tensor, observations, epsilon)
+        action = self.q_fn.get_action(observation_tensor, observations, epsilon, head)
 
         state_tensor = mol2fp(action, state_step + 1, self.hparams)
 
@@ -182,24 +184,24 @@ class DQLearning:
         next_state = mol2fp(next_state_mol, next_state_step, self.hparams).to(self.DEVICE)
 
         next_observations = list(self.env.get_valid_actions())
-        observation_tensor = mol2fp(next_observations, next_state_step, self.hparams)
+        next_observation_tensor = mol2fp(next_observations, next_state_step, self.hparams)
 
         if not gen:
             self.memory.add(
                 obs_t=state_tensor.numpy(),
                 action=0,
                 reward=reward,
-                obs_tp1=observation_tensor.numpy(),
+                obs_tp1=next_observation_tensor.numpy(),
                 done=float(done)
             )
 
         return next_state, next_state_mol, next_state_step, reward, done
 
-    def _compute_td_loss(self, batch_size):
+    def _compute_td_loss(self, batch_size, episode):
 
         if self.prioritized:
             state, _, reward, next_states, done, weight, indices = \
-                self.memory.sample(batch_size, beta=self.beta_schedule)
+                self.memory.sample(batch_size, beta=self.beta_schedule.value(episode))
         else:
             state, _, reward, next_states, done = self.memory.sample(batch_size)
             weight = np.ones(reward.shape)
@@ -231,11 +233,15 @@ class DQLearning:
                 dim=0
             )
 
-        td_target = Variable(reward + self.gamma * next_q_value.squeeze() * (1 - done))
+        done_mask = 1 - done
+        masked_next_q = next_q_value.squeeze() * done_mask
+        td_target = Variable(reward + self.gamma * masked_next_q)
+        td_error = (q_value - td_target).pow(2)
+        prios = td_error.data + self.prioritized_epsilon
+        td_error = td_error.mean()
 
-        td_error = (q_value - td_target).pow(2).mean()
-
-        loss = F.smooth_l1_loss(q_value, td_target)
+        loss = F.smooth_l1_loss(q_value, td_target, reduction='none')
+        loss = loss.mul(torch.FloatTensor(weight)).mean()
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -243,7 +249,9 @@ class DQLearning:
         self.optimizer.step()
 
         if self.prioritized:
-            self.memory.update_priorities(indices, np.abs(np.squeeze(td_error) + self.prioritized_epsilon).tolist())
+            self.memory.update_priorities(
+                indices, prios
+            )
 
         return td_error.data.item()
 
