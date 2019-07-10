@@ -176,7 +176,7 @@ class DQLearning:
 
         # State Embedding
         observation_tensor = mol2fp(observations, state_step, self.hparams).to(self.DEVICE)
-        action = self.q_fn.get_action(observation_tensor, observations, epsilon, head)
+        action = self.q_fn.get_action(observation_tensor, observations, epsilon, head, self.DEVICE)
 
         state_tensor = mol2fp(action, state_step + 1, self.hparams)
 

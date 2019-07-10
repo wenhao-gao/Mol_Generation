@@ -40,11 +40,11 @@ class MultiLayerNetwork(nn.Module):
         x = self.dense(x)
         return x
 
-    def get_action(self, state, observations, epsilon, head=0):
+    def get_action(self, state, observations, epsilon, head=0, device='cpu'):
 
         if random.random() > epsilon:
             q_value = self.forward(state).squeeze(1)
-            q_value = q_value.gather(1, torch.LongTensor([head] * q_value.shape[0]).unsqueeze(1))
+            q_value = q_value.gather(1, torch.LongTensor([head] * q_value.shape[0]).unsqueeze(1).to(device))
             action = observations[q_value.argmax().item()]
 
         else:
