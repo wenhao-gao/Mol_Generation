@@ -99,7 +99,7 @@ class DQLearning:
             self.memory = replay_buffer.ReplayBuffer(self.replay_buffer_size)
             self.beta_schedule = None
 
-        for episode in range(1, self.num_episodes + 1):
+        for episode in range(self.num_episodes):
 
             global_step = self._episode(
                 episode,
@@ -132,7 +132,7 @@ class DQLearning:
 
             if done:
 
-                print('Episode %d/%d took %gs' % (episode, self.num_episodes, time.time() - episode_start_time))
+                print('Episode %d/%d took %gs' % (episode + 1, self.num_episodes, time.time() - episode_start_time))
                 print('SMIELS: %s' % state_mol)
                 print('The reward is: %s\n' % str(reward))
 
@@ -221,13 +221,14 @@ class DQLearning:
 
             q_tp1_online_idx = [
                 torch.stack(
-                    [torch.argmax(q, dim=0), torch.range(0, self.num_bootstrap_heads - 1, dtype=torch.int64).to(self.DEVICE)],
+                    [torch.argmax(q.view(-1, self.num_bootstrap_heads), dim=0),
+                     torch.range(0, self.num_bootstrap_heads - 1, dtype=torch.int64).to(self.DEVICE)],
                     dim=1
                 ) for q in q_tp1_online
             ]
 
             next_q_value = torch.stack(
-                [q[idx[:, 0], idx[:, 1]] for q, idx in zip(q_tp1, q_tp1_online_idx)],
+                [q.view(-1, self.num_bootstrap_heads)[idx[:, 0], idx[:, 1]] for q, idx in zip(q_tp1, q_tp1_online_idx)],
                 dim=0
             )
 
